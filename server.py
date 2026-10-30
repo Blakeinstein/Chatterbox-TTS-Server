@@ -1544,6 +1544,20 @@ async def openai_speech_endpoint(request: OpenAISpeechRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# --- Zonos / SkyrimNet Gradio API (/gradio_api/call/generate_audio) ---
+# Gradio must own the ASGI root so /gradio_api exists (higgs3 / langdon pattern).
+# FastAPI routes are prepended onto Gradio's app — Mount(path="/") does not work.
+try:
+    from gradio_api import install_zonos_gradio_root
+
+    app = install_zonos_gradio_root(app)
+except Exception as e_gradio:
+    logger.warning(
+        "Zonos Gradio API not installed (install 'gradio' for /gradio_api/call/generate_audio): %s",
+        e_gradio,
+    )
+
+
 # --- Main Execution ---
 if __name__ == "__main__":
     server_host = get_host()
@@ -1556,6 +1570,9 @@ if __name__ == "__main__":
         f"API documentation will be available at {protocol}://{server_host}:{server_port}/docs"
     )
     logger.info(f"Web UI will be available at {protocol}://{server_host}:{server_port}/")
+    logger.info(
+        f"Zonos Gradio API: {protocol}://{server_host}:{server_port}/gradio_api/call/generate_audio"
+    )
 
     import uvicorn
 

@@ -37,6 +37,7 @@ resemble-perth==1.0.1
 # Core Web Framework
 fastapi>=0.100.0,<0.116.0      # starlette<1.0 needed for TemplateResponse compat
 uvicorn[standard]>=0.27.0
+gradio>=4.44.0,<5              # SkyrimNet /gradio_api (generate_audio), langdon-compatible
 
 # ML & Audio Libraries
 numpy>=1.24.0

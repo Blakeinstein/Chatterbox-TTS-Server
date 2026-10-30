@@ -48,9 +48,10 @@ RUN pip3 install --no-cache-dir --upgrade pip && \
 COPY . .
 
 # Create required directories for the application (fixed syntax error)
-RUN mkdir -p model_cache reference_audio outputs voices logs hf_cache
+RUN mkdir -p model_cache reference_audio outputs voices logs hf_cache assets
 
-# Expose the port the application will run on
+# Zonos Gradio API: POST /gradio_api/call/generate_audio (then GET .../event_id)
+# Point Gradio Client / SkyrimNet / Zonos wrappers at http://<host>:8004/
 EXPOSE 8004
 
 # Command to run the application

@@ -432,6 +432,9 @@ def synthesize(
     cfg_weight: float = 0.5,
     seed: int = 0,
     language: str = "en",
+    min_p: Optional[float] = None,
+    top_p: Optional[float] = None,
+    repetition_penalty: Optional[float] = None,
 ) -> Tuple[Optional[torch.Tensor], Optional[int]]:
     """
     Synthesizes audio from text using the loaded TTS model.
@@ -445,6 +448,9 @@ def synthesize(
         seed: Random seed for generation. If 0, default randomness is used.
               If non-zero, a global seed is set for reproducibility.
         language: Language code for multilingual model (e.g., 'en', 'it', 'de').
+        min_p: Optional min-p sampler threshold (passed through when model supports it).
+        top_p: Optional top-p sampler threshold (passed through when model supports it).
+        repetition_penalty: Optional repetition penalty (passed through when model supports it).
 
     Returns:
         A tuple containing the audio waveform (torch.Tensor) and the sample rate (int),
@@ -469,7 +475,8 @@ def synthesize(
         logger.debug(
             f"Synthesizing with params: audio_prompt='{audio_prompt_path}', temp={temperature}, "
             f"exag={exaggeration}, cfg_weight={cfg_weight}, seed_applied_globally_if_nonzero={seed}, "
-            f"language={language}"
+            f"language={language}, min_p={min_p}, top_p={top_p}, "
+            f"repetition_penalty={repetition_penalty}"
         )
 
         # Voice conditioning cache: skip re-encoding the same voice file.
@@ -484,27 +491,36 @@ def synthesize(
                 effective_prompt = None  # conds already set, skip prepare_conditionals
                 logger.debug(f"Voice cache hit: {audio_prompt_path}")
 
+        generate_kwargs = {
+            "text": text,
+            "audio_prompt_path": effective_prompt,
+            "temperature": temperature,
+            "exaggeration": exaggeration,
+            "cfg_weight": cfg_weight,
+        }
+        if loaded_model_type == "multilingual":
+            generate_kwargs["language_id"] = language
+        # Optional sampler knobs (chatterbox-v2 / turbo accept these; older builds ignore via TypeError fallback)
+        optional_samplers = {
+            "min_p": min_p,
+            "top_p": top_p,
+            "repetition_penalty": repetition_penalty,
+        }
+        for key, value in optional_samplers.items():
+            if value is not None:
+                generate_kwargs[key] = value
+
         # Call the core model's generate method.
         # autocast promotes float32 inputs to bfloat16 to match T3/S3Gen weights,
         # keeping numerically sensitive ops (softmax, norms) in float32 automatically.
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=BF16_ENABLED):
-            if loaded_model_type == "multilingual":
-                wav_tensor = chatterbox_model.generate(
-                    text=text,
-                    language_id=language,
-                    audio_prompt_path=effective_prompt,
-                    temperature=temperature,
-                    exaggeration=exaggeration,
-                    cfg_weight=cfg_weight,
-                )
-            else:
-                wav_tensor = chatterbox_model.generate(
-                    text=text,
-                    audio_prompt_path=effective_prompt,
-                    temperature=temperature,
-                    exaggeration=exaggeration,
-                    cfg_weight=cfg_weight,
-                )
+            try:
+                wav_tensor = chatterbox_model.generate(**generate_kwargs)
+            except TypeError:
+                # Older chatterbox builds may not accept sampler kwargs.
+                for key in optional_samplers:
+                    generate_kwargs.pop(key, None)
+                wav_tensor = chatterbox_model.generate(**generate_kwargs)
 
         # Store conds in cache after first compute for this voice.
         if conds_key is not None and effective_prompt is not None:
