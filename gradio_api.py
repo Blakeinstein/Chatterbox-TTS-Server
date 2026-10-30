@@ -394,6 +394,48 @@ def _patch_file_input_sanitiser() -> None:
     logger.info("Zonos file-input sanitiser installed")
 
 
+class _GradioApiPrefixCompat:
+    """
+    Zonos / Gradio Client (Gradio 5+) call /gradio_api/call/... .
+    Gradio 4.x registers the same handlers at /call/... (no prefix).
+    Rewrite the prefix so both client generations work.
+
+    Pure ASGI middleware (not BaseHTTPMiddleware) so Gradio SSE/queue streams
+    are not broken.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    def __getattr__(self, name):
+        # Delegate FastAPI/Gradio attributes (router, state, lifespan, ...)
+        return getattr(self.app, name)
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] in ("http", "websocket"):
+            path = scope.get("path", "")
+            if path == "/gradio_api" or path.startswith("/gradio_api/"):
+                scope = dict(scope)
+                scope["path"] = path[len("/gradio_api") :] or "/"
+                raw = scope.get("raw_path")
+                if isinstance(raw, (bytes, bytearray)):
+                    raw_s = raw.decode("latin-1")
+                    if raw_s.startswith("/gradio_api"):
+                        scope["raw_path"] = (raw_s[len("/gradio_api") :] or "/").encode(
+                            "latin-1"
+                        )
+        await self.app(scope, receive, send)
+
+
+def _gradio_natively_has_api_prefix(gradio_app) -> bool:
+    """True on Gradio 5+ where routes are already under /gradio_api."""
+    for route in gradio_app.router.routes:
+        path = getattr(route, "path", "") or ""
+        if path.startswith("/gradio_api"):
+            return True
+    return False
+
+
 def install_zonos_gradio_root(fastapi_app):
     """
     Make Gradio the ASGI root (so /gradio_api/call/generate_audio exists) while
@@ -435,8 +477,21 @@ def install_zonos_gradio_root(fastapi_app):
         allow_headers=["*"],
     )
 
+    # Gradio 4: /call/...  → expose as /gradio_api/call/... for Zonos clients.
+    # Gradio 5 already uses /gradio_api; skip rewrite in that case.
+    if _gradio_natively_has_api_prefix(gradio_app):
+        logger.info("Gradio natively serves /gradio_api; no prefix rewrite needed")
+        asgi_app = gradio_app
+    else:
+        logger.info(
+            "Wrapping Gradio 4 routes with /gradio_api prefix compat "
+            "(Zonos clients expect /gradio_api/call/generate_audio)"
+        )
+        asgi_app = _GradioApiPrefixCompat(gradio_app)
+
     logger.info(
         "Zonos Gradio API installed at server root "
-        "(POST /gradio_api/call/generate_audio). FastAPI UI/routes preserved."
+        "(POST /gradio_api/call/generate_audio and /call/generate_audio). "
+        "FastAPI UI/routes preserved."
     )
-    return gradio_app
+    return asgi_app
